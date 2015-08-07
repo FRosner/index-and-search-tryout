@@ -14,6 +14,7 @@ import org.apache.lucene.store.RAMDirectory;
 
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.Date;
 
 public class App {
 
@@ -30,17 +31,33 @@ public class App {
         writer.addDocument(createPerson("Frank", Lists.newArrayList("Cakes", "Pencils"), 51.2, 11.0, 0.6));
         writer.addDocument(createPerson("Milos", Lists.newArrayList("Pencils", "Cars"), 52.5, 12.0, 0.15));
         writer.addDocument(createPerson("Marco", Lists.newArrayList("Pencils"), 52.5, 12.5, 0.1));
+        for (int i = 0; i < 10000; i++) {
+            writer.addDocument(createPerson("Person" + i, Lists.newArrayList("Dummy"), 40 + (double) i / 1000, 10 + (double) i / 1000, (double) i / 10000));
+        }
         writer.forceMerge(1);
         writer.close();
 
         final IndexReader reader = DirectoryReader.open(dir);
         IndexSearcher searcher = new IndexSearcher(reader);
-        TopDocs result = searcher.search(new PersonScoreQuery(new PersonQuery(Sets.newHashSet("Cakes", "Pencils"), 50d, 10d)), 10);
+        searcher.search(new MatchAllDocsQuery(), 10); // warmup
+        submitQuery(searcher, new PersonScoreQuery(new PersonQuery(Sets.newHashSet("Pencils"), 50d, 10d)));
+        submitQuery(searcher, new PersonScoreQuery(new PersonQuery(Sets.newHashSet("Cakes"), 50d, 10d)));
+        submitQuery(searcher, new PersonScoreQuery(new PersonQuery(Sets.newHashSet("Cakes", "Pencils", "Dummy"), 50d, 10d)));
+        submitQuery(searcher, new PersonScoreQuery(new PersonQuery(Sets.newHashSet("Cakes", "Dummy"), 50d, 10d)));
+        submitQuery(searcher, new PersonScoreQuery(new PersonQuery(Sets.newHashSet("Cars"), 50d, 10d)));
+        reader.close();
+    }
+
+    private static void submitQuery(final IndexSearcher searcher, Query query) throws IOException {
+        System.out.println(String.format("[%s] Submitting query %s", new Date(), query));
+        Date before = new Date();
+        TopDocs result = searcher.search(query, 10);
+        Date after = new Date();
         Iterable<String> topPersons = Iterables.transform(Arrays.asList(result.scoreDocs), new Function<ScoreDoc, String>() {
             @Override
             public String apply(ScoreDoc scoreDoc) {
                 try {
-                    Document document = reader.document(scoreDoc.doc);
+                    Document document = searcher.getIndexReader().document(scoreDoc.doc);
                     String personName = document.getField(App.NAME_FIELD).stringValue();
                     return personName + " (" + scoreDoc.score + ")";
                 } catch (IOException e) {
@@ -48,8 +65,7 @@ public class App {
                 }
             }
         });
-        System.out.println(Iterables.toString(topPersons));
-        reader.close();
+        System.out.println(String.format("[%s] Retrieved results in %s ms: %s", new Date(), after.getTime() - before.getTime(), Iterables.toString(topPersons)));
     }
 
     private static Document createPerson(String name, Iterable<String> products, double lat, double lon, double kpi) {
